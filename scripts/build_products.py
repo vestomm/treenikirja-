@@ -32,6 +32,7 @@ EXPORT_URL = "https://static.openfoodfacts.org/data/en.openfoodfacts.org.product
 # Open Food Facts pyytää jokaiseen pyyntöön oman User-Agentin.
 USER_AGENT = "Treenikirja/1.0 (https://github.com/vestomm/treenikirja-)"
 COUNTRY_TAG = "en:finland"
+NEARBY_TAGS = {"en:sweden", "en:norway", "en:denmark", "en:estonia"}  # tilastoa varten: laajennuksen koko
 
 # Kentät tiedostossa, tässä järjestyksessä. Sovellus lukee ne samassa järjestyksessä.
 FIELDS = ["code", "name", "brand", "kcal", "protein", "carbs", "fat", "nova", "nutriscore", "additives", "serving"]
@@ -75,10 +76,13 @@ def first_brand(value: str | None) -> str:
     return clean_text((value or "").split(",")[0], 60)
 
 
-def parse_row(row: dict) -> list | None:
+def country_tags(row: dict) -> set[str]:
+    return {t.strip() for t in (row.get("countries_tags") or "").split(",") if t.strip()}
+
+
+def parse_row(row: dict, check_country: bool = True) -> list | None:
     """Yksi CSV-rivi → tiedoston rivi, tai None jos tuote ei kelpaa."""
-    tags = (row.get("countries_tags") or "").split(",")
-    if COUNTRY_TAG not in (t.strip() for t in tags):
+    if check_country and COUNTRY_TAG not in country_tags(row):
         return None
     code = (row.get("code") or "").strip()
     if not code.isdigit() or not 8 <= len(code) <= 14:
@@ -145,15 +149,25 @@ def build(lines) -> tuple[list[list], dict]:
         similar = [h for h in header if any(k in h for k in ("energy", "protein", "carbo", "fat", "countr", "name", "brand"))]
         raise SystemExit(f"Viennin sarakkeet ovat muuttuneet. Puuttuu: {missing or ENERGY_COLUMNS}. Lähimmät: {similar[:40]}")
 
-    stats = {"rows": 0, "finland": 0, "kept": 0}
+    stats = {"rows": 0, "finland": 0, "kept": 0, "fi_prefix_untagged_complete": 0, "nearby_complete": 0}
     by_code: dict[str, list] = {}
     for row in reader:
         stats["rows"] += 1
-        if COUNTRY_TAG in (row.get("countries_tags") or ""):
+        tags = country_tags(row)
+        if COUNTRY_TAG in tags:
             stats["finland"] += 1
-        parsed = parse_row(row)
-        if parsed:
-            by_code[parsed[0]] = parsed  # sama koodi kahdesti → viimeisin jää
+            parsed = parse_row(row, check_country=False)
+            if parsed:
+                by_code[parsed[0]] = parsed  # sama koodi kahdesti → viimeisin jää
+        else:
+            # Pelkkä tilasto: paljonko lista kasvaisi laajennuksilla (ei mukana tiedostossa).
+            code = (row.get("code") or "").strip()
+            if code.startswith("64") or tags & NEARBY_TAGS:
+                if parse_row(row, check_country=False):
+                    if code.startswith("64"):
+                        stats["fi_prefix_untagged_complete"] += 1
+                    if tags & NEARBY_TAGS:
+                        stats["nearby_complete"] += 1
         if stats["rows"] % 500_000 == 0:
             print(f"  {stats['rows']:,} riviä, Suomen tuotteita {stats['finland']:,}", flush=True)
     rows = sorted(by_code.values(), key=lambda r: r[0])  # vakaa järjestys → pienet muutokset gitissä
@@ -161,18 +175,19 @@ def build(lines) -> tuple[list[list], dict]:
     return rows, stats
 
 
-def to_js(rows: list[list], updated: str) -> str:
-    payload = {"v": 1, "updated": updated, "count": len(rows), "source": "Open Food Facts (ODbL)", "fields": FIELDS, "rows": rows}
+def to_js(rows: list[list], updated: str, stats: dict | None = None) -> str:
+    payload = {"v": 1, "updated": updated, "count": len(rows), "source": "Open Food Facts (ODbL)", "stats": stats or {}, "fields": FIELDS, "rows": rows}
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return "/* Tiedot: Open Food Facts (https://openfoodfacts.org), ODbL. Generoitu automaattisesti. */\nwindow.TK_PRODUCTS=" + body + ";\n"
 
 
-def read_rows(path: str) -> list | None:
-    """Aiemman tiedoston rivit vertailua varten. Puuttuva tai rikkinäinen tiedosto → None."""
+def read_previous(path: str) -> tuple | None:
+    """Aiemman tiedoston (rivit, tilastot) vertailua varten. Puuttuva tai rikkinäinen → None."""
     try:
         with open(path, encoding="utf-8") as f:
             body = f.read().split("window.TK_PRODUCTS=", 1)[1].rstrip().rstrip(";")
-        return json.loads(body)["rows"]
+        data = json.loads(body)
+        return data["rows"], data.get("stats")
     except (OSError, IndexError, ValueError, KeyError):
         return None
 
@@ -188,16 +203,17 @@ def main() -> None:
     with open_source(args.source) as lines:
         rows, stats = build(lines)
     print(f"Valmis: {stats['rows']:,} riviä, Suomen tuotteita {stats['finland']:,}, listalle {stats['kept']:,}")
+    print(f"  Laajennukset: 64-koodi ilman Suomi-merkintää {stats['fi_prefix_untagged_complete']:,}, lähimaat {stats['nearby_complete']:,}")
 
     if stats["kept"] < args.min_count:
         raise SystemExit(f"Vain {stats['kept']} tuotetta, oletettiin vähintään {args.min_count}. Vanhaa listaa ei korvata.")
 
-    if read_rows(args.out) == rows:
+    if read_previous(args.out) == (rows, stats):
         print(f"Ei muutoksia tuotteisiin, {args.out} jätetään ennalleen.")
         return
 
     updated = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    js = to_js(rows, updated)
+    js = to_js(rows, updated, stats)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(js)
     size_mb = len(js.encode("utf-8")) / 1e6

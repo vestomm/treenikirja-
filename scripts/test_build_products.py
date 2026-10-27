@@ -85,10 +85,21 @@ class Build(unittest.TestCase):
             {**RAHKA, "code": "4006381333931", "product_name": 'Kaura "Extra"'},  # lainausmerkki nimessä
         ])
         rows, stats = bp.build(io.StringIO(text))
-        self.assertEqual(stats, {"rows": 5, "finland": 4, "kept": 2})
+        self.assertEqual(stats, {"rows": 5, "finland": 4, "kept": 2, "fi_prefix_untagged_complete": 0, "nearby_complete": 0})
         self.assertEqual([r[0] for r in rows], ["4006381333931", "6408430000135"])
         self.assertEqual(rows[1][1], "Rahka uusi nimi")
         self.assertEqual(rows[0][1], 'Kaura "Extra"')
+
+    def test_laajennustilastot(self):
+        text = tsv([
+            {**RAHKA, "code": "6411401035397", "countries_tags": ""},  # 64-koodi, ei maata
+            {**RAHKA, "code": "7310350000002", "countries_tags": "en:sweden"},  # Ruotsi
+            {**RAHKA, "code": "7310350000019", "countries_tags": "en:sweden", "fat_100g": ""},  # vajaa
+        ])
+        rows, stats = bp.build(io.StringIO(text))
+        self.assertEqual(rows, [])
+        self.assertEqual(stats["fi_prefix_untagged_complete"], 1)
+        self.assertEqual(stats["nearby_complete"], 1)
 
     def test_muuttuneet_sarakkeet_pysayttavat(self):
         with self.assertRaises(SystemExit) as cm:
