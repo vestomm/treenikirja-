@@ -35,13 +35,19 @@ RAHKA = {"code": "6408430000135", "product_name": "Maustamaton rahka", "brands":
 
 class ParseRow(unittest.TestCase):
     def test_kelvollinen_suomalainen_tuote(self):
-        self.assertEqual(bp.parse_row(RAHKA), ["6408430000135", "Maustamaton rahka", "Valio", 63, 11.5, 3.6, 0.2, 1, "a", 0, 250.0])
+        self.assertEqual(bp.parse_row(RAHKA), ["6408430000135", "Maustamaton rahka", "Valio", 63, 11.5, 3.6, 0.2, 1, "a", 0, 250.0, 1])
 
-    def test_muu_maa_ohitetaan(self):
-        self.assertIsNone(bp.parse_row({**RAHKA, "countries_tags": "en:france"}))
+    def test_kaukainen_maa_ohitetaan(self):
+        self.assertIsNone(bp.parse_row({**RAHKA, "code": "3017624010701", "countries_tags": "en:france"}))
 
     def test_tagi_tarkistetaan_kokonaisena(self):
-        self.assertIsNone(bp.parse_row({**RAHKA, "countries_tags": "en:finlandia-fake"}))
+        self.assertIsNone(bp.parse_row({**RAHKA, "code": "3017624010701", "countries_tags": "en:finlandia-fake"}))
+
+    def test_suomalainen_koodi_ilman_maata_on_suomi(self):
+        self.assertEqual(bp.parse_row({**RAHKA, "countries_tags": ""})[-1], 1)
+
+    def test_lahimaa_mukaan_merkinnalla(self):
+        self.assertEqual(bp.parse_row({**RAHKA, "code": "7310350000002", "countries_tags": "en:sweden"})[-1], 0)
 
     def test_kcal_kilojouleista(self):
         r = bp.parse_row({**RAHKA, "energy-kcal_100g": "", "energy-kj_100g": "1000"})
@@ -69,7 +75,7 @@ class ParseRow(unittest.TestCase):
 
     def test_valinnaiset_kentat_siivotaan(self):
         r = bp.parse_row({**RAHKA, "nova_group": "7", "nutriscore_grade": "unknown", "additives_n": "", "serving_quantity": "0"})
-        self.assertEqual(r[7:], [None, None, None, None])
+        self.assertEqual(r[7:11], [None, None, None, None])
 
     def test_pilkku_desimaalina(self):
         self.assertEqual(bp.parse_row({**RAHKA, "proteins_100g": "11,5"})[4], 11.5)
@@ -79,27 +85,33 @@ class Build(unittest.TestCase):
     def test_suodatus_tilastot_ja_tuplat(self):
         text = tsv([
             RAHKA,
-            {**RAHKA, "code": "3017624010701", "product_name": "Nutella", "countries_tags": "en:france"},
+            {**RAHKA, "code": "3017624010701", "product_name": "Nutella", "countries_tags": "en:france,en:germany"},
             {**RAHKA, "product_name": "Rahka uusi nimi"},  # sama koodi → viimeisin jää
             {**RAHKA, "code": "96385074", "product_name": 'Patukka "Max" 50 g', "fat_100g": ""},  # ei rasvaa
             {**RAHKA, "code": "4006381333931", "product_name": 'Kaura "Extra"'},  # lainausmerkki nimessä
         ])
         rows, stats = bp.build(io.StringIO(text))
-        self.assertEqual(stats, {"rows": 5, "finland": 4, "kept": 2, "fi_prefix_untagged_complete": 0, "nearby_complete": 0})
+        self.assertEqual(stats, {"rows": 5, "finland": 4, "kept": 2, "kept_fi": 2, "kept_near": 0})
         self.assertEqual([r[0] for r in rows], ["4006381333931", "6408430000135"])
         self.assertEqual(rows[1][1], "Rahka uusi nimi")
         self.assertEqual(rows[0][1], 'Kaura "Extra"')
 
-    def test_laajennustilastot(self):
+    def test_suomi_ja_lahimaat(self):
         text = tsv([
-            {**RAHKA, "code": "6411401035397", "countries_tags": ""},  # 64-koodi, ei maata
-            {**RAHKA, "code": "7310350000002", "countries_tags": "en:sweden"},  # Ruotsi
+            {**RAHKA, "code": "6411401035397", "countries_tags": ""},  # 64-koodi, ei maata → Suomi
+            {**RAHKA, "code": "7310350000002", "countries_tags": "en:sweden", "product_name": "Kvarg SE"},
+            {**RAHKA, "code": "7310350000002", "countries_tags": "en:sweden,en:finland", "product_name": "Rahka FI"},
+            {**RAHKA, "code": "7310350000002", "countries_tags": "en:sweden", "product_name": "Kvarg SE 2"},  # ei voita Suomen riviä
             {**RAHKA, "code": "7310350000019", "countries_tags": "en:sweden", "fat_100g": ""},  # vajaa
+            {**RAHKA, "code": "5701234567892", "countries_tags": "en:denmark"},
         ])
         rows, stats = bp.build(io.StringIO(text))
-        self.assertEqual(rows, [])
-        self.assertEqual(stats["fi_prefix_untagged_complete"], 1)
-        self.assertEqual(stats["nearby_complete"], 1)
+        self.assertEqual({r[0]: (r[1], r[-1]) for r in rows}, {
+            "6411401035397": ("Maustamaton rahka", 1),
+            "7310350000002": ("Rahka FI", 1),
+            "5701234567892": ("Maustamaton rahka", 0),
+        })
+        self.assertEqual((stats["kept_fi"], stats["kept_near"]), (2, 1))
 
     def test_muuttuneet_sarakkeet_pysayttavat(self):
         with self.assertRaises(SystemExit) as cm:

@@ -1,7 +1,9 @@
 """Rakentaa Treenikirjan tuotelistan Open Food Factsin CSV-viennistä.
 
-Lataa koko viennin virtana (noin 1 Gt pakattuna), poimii Suomessa myytävät tuotteet,
-joilla on täydet ravintoarvot, ja kirjoittaa ne pieneen JavaScript-tiedostoon:
+Lataa koko viennin virtana (noin 1 Gt pakattuna), poimii tuotteet, joilla on täydet
+ravintoarvot ja jotka myydään Suomessa (Suomi-merkintä tai suomalainen 64-alkuinen
+viivakoodi) tai lähimaissa (Ruotsi, Norja, Tanska, Viro: moni tuontituote myydään Suomessa
+samalla viivakoodilla), ja kirjoittaa ne pieneen JavaScript-tiedostoon:
 
     window.TK_PRODUCTS = {v: 1, updated: "...", count: N, fields: [...], rows: [[...], ...]};
 
@@ -32,10 +34,12 @@ EXPORT_URL = "https://static.openfoodfacts.org/data/en.openfoodfacts.org.product
 # Open Food Facts pyytää jokaiseen pyyntöön oman User-Agentin.
 USER_AGENT = "Treenikirja/1.0 (https://github.com/vestomm/treenikirja-)"
 COUNTRY_TAG = "en:finland"
-NEARBY_TAGS = {"en:sweden", "en:norway", "en:denmark", "en:estonia"}  # tilastoa varten: laajennuksen koko
+NEARBY_TAGS = {"en:sweden", "en:norway", "en:denmark", "en:estonia"}
+FI_PREFIX = "64"  # GS1 Finland
 
 # Kentät tiedostossa, tässä järjestyksessä. Sovellus lukee ne samassa järjestyksessä.
-FIELDS = ["code", "name", "brand", "kcal", "protein", "carbs", "fat", "nova", "nutriscore", "additives", "serving"]
+# fi = 1, jos tuote on merkitty Suomessa myytäväksi tai sillä on suomalainen koodi (nimihaussa ensin).
+FIELDS = ["code", "name", "brand", "kcal", "protein", "carbs", "fat", "nova", "nutriscore", "additives", "serving", "fi"]
 
 REQUIRED_COLUMNS = ["code", "product_name", "brands", "countries_tags", "proteins_100g", "carbohydrates_100g", "fat_100g"]
 ENERGY_COLUMNS = ["energy-kcal_100g", "energy-kj_100g", "energy_100g"]
@@ -80,9 +84,20 @@ def country_tags(row: dict) -> set[str]:
     return {t.strip() for t in (row.get("countries_tags") or "").split(",") if t.strip()}
 
 
-def parse_row(row: dict, check_country: bool = True) -> list | None:
+def region(row: dict) -> str | None:
+    """"fi" = Suomi, "near" = lähimaa, None = ei mukaan."""
+    tags = country_tags(row)
+    if COUNTRY_TAG in tags or (row.get("code") or "").strip().startswith(FI_PREFIX):
+        return "fi"
+    if tags & NEARBY_TAGS:
+        return "near"
+    return None
+
+
+def parse_row(row: dict) -> list | None:
     """Yksi CSV-rivi → tiedoston rivi, tai None jos tuote ei kelpaa."""
-    if check_country and COUNTRY_TAG not in country_tags(row):
+    where = region(row)
+    if where is None:
         return None
     code = (row.get("code") or "").strip()
     if not code.isdigit() or not 8 <= len(code) <= 14:
@@ -122,6 +137,7 @@ def parse_row(row: dict, check_country: bool = True) -> list | None:
         grade,
         additives,
         serving,
+        1 if where == "fi" else 0,
     ]
 
 
@@ -149,29 +165,23 @@ def build(lines) -> tuple[list[list], dict]:
         similar = [h for h in header if any(k in h for k in ("energy", "protein", "carbo", "fat", "countr", "name", "brand"))]
         raise SystemExit(f"Viennin sarakkeet ovat muuttuneet. Puuttuu: {missing or ENERGY_COLUMNS}. Lähimmät: {similar[:40]}")
 
-    stats = {"rows": 0, "finland": 0, "kept": 0, "fi_prefix_untagged_complete": 0, "nearby_complete": 0}
+    stats = {"rows": 0, "finland": 0, "kept": 0, "kept_fi": 0, "kept_near": 0}
     by_code: dict[str, list] = {}
     for row in reader:
         stats["rows"] += 1
-        tags = country_tags(row)
-        if COUNTRY_TAG in tags:
+        if COUNTRY_TAG in country_tags(row):
             stats["finland"] += 1
-            parsed = parse_row(row, check_country=False)
-            if parsed:
-                by_code[parsed[0]] = parsed  # sama koodi kahdesti → viimeisin jää
-        else:
-            # Pelkkä tilasto: paljonko lista kasvaisi laajennuksilla (ei mukana tiedostossa).
-            code = (row.get("code") or "").strip()
-            if code.startswith("64") or tags & NEARBY_TAGS:
-                if parse_row(row, check_country=False):
-                    if code.startswith("64"):
-                        stats["fi_prefix_untagged_complete"] += 1
-                    if tags & NEARBY_TAGS:
-                        stats["nearby_complete"] += 1
+        parsed = parse_row(row)
+        if parsed:
+            prev = by_code.get(parsed[0])
+            if prev is None or parsed[-1] >= prev[-1]:  # sama koodi kahdesti → Suomen rivi voittaa, muuten viimeisin
+                by_code[parsed[0]] = parsed
         if stats["rows"] % 500_000 == 0:
             print(f"  {stats['rows']:,} riviä, Suomen tuotteita {stats['finland']:,}", flush=True)
     rows = sorted(by_code.values(), key=lambda r: r[0])  # vakaa järjestys → pienet muutokset gitissä
     stats["kept"] = len(rows)
+    stats["kept_fi"] = sum(r[-1] for r in rows)
+    stats["kept_near"] = stats["kept"] - stats["kept_fi"]
     return rows, stats
 
 
@@ -203,7 +213,7 @@ def main() -> None:
     with open_source(args.source) as lines:
         rows, stats = build(lines)
     print(f"Valmis: {stats['rows']:,} riviä, Suomen tuotteita {stats['finland']:,}, listalle {stats['kept']:,}")
-    print(f"  Laajennukset: 64-koodi ilman Suomi-merkintää {stats['fi_prefix_untagged_complete']:,}, lähimaat {stats['nearby_complete']:,}")
+    print(f"  Suomi {stats['kept_fi']:,}, lähimaat {stats['kept_near']:,}")
 
     if stats["kept"] < args.min_count:
         raise SystemExit(f"Vain {stats['kept']} tuotetta, oletettiin vähintään {args.min_count}. Vanhaa listaa ei korvata.")
@@ -224,8 +234,9 @@ def main() -> None:
         with open(summary, "a", encoding="utf-8") as f:
             f.write(
                 f"### Tuotelista {updated}\n\n| | |\n|---|---|\n"
-                f"| Viennin rivejä | {stats['rows']:,} |\n| Suomessa myytäviä | {stats['finland']:,} |\n"
-                f"| Listalla (täydet ravintoarvot) | {stats['kept']:,} |\n| Tiedoston koko | {size_mb:.1f} Mt |\n"
+                f"| Viennin rivejä | {stats['rows']:,} |\n| Merkitty Suomessa myytäviksi | {stats['finland']:,} |\n"
+                f"| Listalla yhteensä | {stats['kept']:,} |\n| – Suomi (merkintä tai 64-koodi) | {stats['kept_fi']:,} |\n"
+                f"| – Lähimaat | {stats['kept_near']:,} |\n| Tiedoston koko | {size_mb:.1f} Mt |\n"
             )
 
 

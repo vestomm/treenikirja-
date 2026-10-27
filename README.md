@@ -5,7 +5,9 @@ Suomessa myytävien elintarvikkeiden ravintoarvot Treenikirja-sovelluksen viivak
 ## Miten tämä toimii
 
 1. GitHub Actions ajaa maanantaisin skriptin `scripts/build_products.py`.
-2. Skripti lataa Open Food Factsin koko CSV-viennin ja poimii tuotteet, jotka on merkitty Suomessa myytäviksi ja joilla on täydet ravintoarvot (energia, proteiini, hiilihydraatit, rasva per 100 g).
+2. Skripti lataa Open Food Factsin koko CSV-viennin ja poimii tuotteet, joilla on täydet ravintoarvot (energia, proteiini, hiilihydraatit, rasva per 100 g) ja jotka
+   - on merkitty Suomessa myytäviksi tai joilla on suomalainen 64-alkuinen viivakoodi (`fi: 1`), tai
+   - myydään Ruotsissa, Norjassa, Tanskassa tai Virossa (`fi: 0`). Moni tuontituote myydään Suomessa samalla viivakoodilla.
 3. Tulos tallentuu tiedostoon `products-fi.js`, jos se muuttui.
 4. Treenikirja lataa tiedoston jsDelivrin kautta:
    `https://cdn.jsdelivr.net/gh/vestomm/treenikirja-@main/products-fi.js`
@@ -28,8 +30,9 @@ python scripts/build_products.py --out products-fi.js
 ```js
 window.TK_PRODUCTS = {
   v: 1, updated: "2026-10-27", count: 12345, source: "Open Food Facts (ODbL)",
-  fields: ["code", "name", "brand", "kcal", "protein", "carbs", "fat", "nova", "nutriscore", "additives", "serving"],
-  rows: [["6408430000135", "Maustamaton rahka", "Valio", 63, 11.5, 3.6, 0.2, 1, "a", 0, 250], ...]
+  stats: { rows: 2117569, finland: 3386, kept: 12000, kept_fi: 3500, kept_near: 8500 },
+  fields: ["code", "name", "brand", "kcal", "protein", "carbs", "fat", "nova", "nutriscore", "additives", "serving", "fi"],
+  rows: [["6408430000135", "Maustamaton rahka", "Valio", 63, 11.5, 3.6, 0.2, 1, "a", 0, 250, 1], ...]
 };
 ```
 
