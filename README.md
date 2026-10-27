@@ -9,8 +9,12 @@ Suomessa myytävien elintarvikkeiden ravintoarvot Treenikirja-sovelluksen viivak
    - on merkitty Suomessa myytäviksi tai joilla on suomalainen 64-alkuinen viivakoodi (`fi: 1`), tai
    - myydään Ruotsissa, Norjassa, Tanskassa tai Virossa (`fi: 0`). Moni tuontituote myydään Suomessa samalla viivakoodilla.
 3. Tulos tallentuu tiedostoon `products-fi.js`, jos se muuttui.
-4. Treenikirja lataa tiedoston jsDelivrin kautta:
-   `https://cdn.jsdelivr.net/gh/vestomm/treenikirja-@main/products-fi.js`
+4. Treenikirja-sovellukseen lista viedään sovelluksen omaksi tiedostoksi `products-fi.json`
+   (skripti `sync_products.py` sovelluksen lähdekoodissa) ja julkaistaan sovelluksen mukana.
+
+   Huom: Claude-artefakti ei saa ladata tiedostoja jsDelivrin GitHub-polusta (`cdn.jsdelivr.net/gh/...`),
+   vain npm-paketteja. Siksi listaa ei ladata suoraan tästä reposta, vaan se kopioidaan sovellukseen.
+   Uusi lista päätyy sovellukseen, kun sovellus julkaistaan uudelleen.
 
 Repossa on vain julkista tuotedataa. Treenit ja ruokapäiväkirja eivät tule tänne.
 
