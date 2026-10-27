@@ -1,0 +1,47 @@
+name: Päivitä tuotelista
+
+on:
+  schedule:
+    - cron: "23 1 * * 1" # maanantaisin klo 1.23 UTC (3.23 Suomen aikaa)
+  workflow_dispatch: # käsin: Actions → Päivitä tuotelista → Run workflow
+  push: # heti, kun skripti tai tämä tiedosto muuttuu
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/update-products.yml"
+
+permissions:
+  contents: write # tuotelistan tallennus repoon
+
+concurrency:
+  group: update-products
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Testit
+        run: python -m unittest discover -s scripts -v
+
+      - name: Rakenna tuotelista Open Food Factsista
+        run: python scripts/build_products.py --out products-fi.js
+
+      - name: Tallenna, jos lista muuttui
+        run: |
+          if [ -z "$(git status --porcelain -- products-fi.js)" ]; then
+            echo "Ei muutoksia."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add products-fi.js
+          git commit -m "Päivitä tuotelista $(date -u +%Y-%m-%d)"
+          git push
